@@ -757,11 +757,17 @@ func (m *Mock) calls() []Call {
 // Arguments holds an array of method arguments or return values.
 type Arguments []interface{}
 
-const (
+var (
 	// Anything is used in Diff and Assert when the argument being tested
 	// shouldn't be taken into consideration.
-	Anything = "mock.Anything"
+	Anything = anythingArgument{}
 )
+
+type anythingArgument struct{}
+
+func (anythingArgument) matchesArg(interface{}) bool {
+	return true
+}
 
 // AnythingOfTypeArgument contains the type of an argument
 // for use when type checking.  Used in [Arguments.Diff] and [Arguments.Assert].
@@ -773,6 +779,13 @@ type AnythingOfTypeArgument = anythingOfTypeArgument
 // for use when type checking.  Used in Diff and Assert.
 type anythingOfTypeArgument string
 
+func (expected anythingOfTypeArgument) matchesArg(actual interface{}) bool {
+	if reflect.TypeOf(actual).Name() != string(expected) && reflect.TypeOf(actual).String() != string(expected) {
+		return false
+	}
+	return true
+}
+
 // AnythingOfType returns a special value containing the
 // name of the type to check for. The type name will be matched against the type name returned by [reflect.Type.String].
 //
@@ -781,7 +794,7 @@ type anythingOfTypeArgument string
 // For example:
 //
 //	args.Assert(t, AnythingOfType("string"), AnythingOfType("int"))
-func AnythingOfType(t string) AnythingOfTypeArgument {
+func AnythingOfType(t string) ArgumentMatcher {
 	return anythingOfTypeArgument(t)
 }
 
@@ -792,6 +805,14 @@ type IsTypeArgument struct {
 	t reflect.Type
 }
 
+func (expected *IsTypeArgument) matchesArg(actual interface{}) bool {
+	actualT := reflect.TypeOf(actual)
+	if actualT != expected.t {
+		return false
+	}
+	return true
+}
+
 // IsType returns an IsTypeArgument object containing the type to check for.
 // You can provide a zero-value of the type to check.  This is an
 // alternative to [AnythingOfType].  Used in [Arguments.Diff] and [Arguments.Assert].
@@ -799,7 +820,7 @@ type IsTypeArgument struct {
 // For example:
 //
 //	args.Assert(t, IsType(""), IsType(0))
-func IsType(t interface{}) *IsTypeArgument {
+func IsType(t interface{}) ArgumentMatcher {
 	return &IsTypeArgument{t: reflect.TypeOf(t)}
 }
 
@@ -810,14 +831,14 @@ type FunctionalOptionsArgument struct {
 }
 
 // String returns the string representation of FunctionalOptionsArgument
-func (f *FunctionalOptionsArgument) String() string {
+func (f *functionalOptionsArgument) String() string {
 	var name string
-	tValue := reflect.ValueOf(f.value)
+	tValue := reflect.ValueOf(f.values)
 	if tValue.Len() > 0 {
 		name = "[]" + reflect.TypeOf(tValue.Index(0).Interface()).String()
 	}
 
-	return strings.Replace(fmt.Sprintf("%#v", f.value), "[]interface {}", name, 1)
+	return strings.Replace(fmt.Sprintf("%#v", f.values), "[]interface {}", name, 1)
 }
 
 // FunctionalOptions returns an [FunctionalOptionsArgument] object containing the functional option type
@@ -825,10 +846,39 @@ func (f *FunctionalOptionsArgument) String() string {
 //
 // For example:
 // Assert(t, FunctionalOptions("[]foo.FunctionalOption", foo.Opt1(), foo.Opt2()))
-func FunctionalOptions(value ...interface{}) *FunctionalOptionsArgument {
-	return &FunctionalOptionsArgument{
-		value: value,
+func FunctionalOptions(value ...interface{}) ArgumentMatcher {
+	return functionalOptionsArgument{
+		values: value,
 	}
+}
+
+type functionalOptionsArgument struct {
+	values []interface{}
+}
+
+func (expected functionalOptionsArgument) matchesArg(actual interface{}) bool {
+	t := expected.values
+
+	var name string
+	tValue := reflect.ValueOf(t)
+	if tValue.Len() > 0 {
+		name = "[]" + reflect.TypeOf(tValue.Index(0).Interface()).String()
+	}
+
+	if name != reflect.TypeOf(actual).String() && tValue.Len() != 0 {
+		return false
+	} else {
+		if ef, af := assertOpts(t, actual); ef == "" && af == "" {
+			return true
+		} else {
+			// not match
+			return false
+		}
+	}
+}
+
+type ArgumentMatcher interface {
+	matchesArg(interface{}) bool
 }
 
 // argumentMatcher performs custom argument matching, returning whether or
@@ -838,7 +888,7 @@ type argumentMatcher struct {
 	fn reflect.Value
 }
 
-func (f argumentMatcher) Matches(argument interface{}) bool {
+func (f argumentMatcher) matchesArg(argument interface{}) bool {
 	expectType := f.fn.Type().In(0)
 	expectTypeNilSupported := false
 	switch expectType.Kind() {
@@ -880,7 +930,7 @@ func (f argumentMatcher) String() string {
 // fn must be a function accepting a single argument (of the expected type)
 // which returns a bool. If fn doesn't match the required signature,
 // MatchedBy() panics.
-func MatchedBy(fn interface{}) argumentMatcher {
+func MatchedBy(fn interface{}) ArgumentMatcher {
 	fnType := reflect.TypeOf(fn)
 
 	if fnType.Kind() != reflect.Func {
@@ -893,7 +943,38 @@ func MatchedBy(fn interface{}) argumentMatcher {
 		panic(fmt.Sprintf("assert: arguments: %s does not return a bool", fn))
 	}
 
-	return argumentMatcher{fn: reflect.ValueOf(fn)}
+	return matchedByArgument{F: reflect.ValueOf(fn)}
+}
+
+type matchedByArgument struct {
+	F reflect.Value
+}
+
+func (expected matchedByArgument) matchesArg(actual interface{}) bool {
+
+	expectType := expected.F.Type().In(0)
+	expectTypeNilSupported := false
+	switch expectType.Kind() {
+	case reflect.Interface, reflect.Chan, reflect.Func, reflect.Map, reflect.Slice, reflect.Ptr:
+		expectTypeNilSupported = true
+	}
+
+	argType := reflect.TypeOf(actual)
+	var arg reflect.Value
+	if argType == nil {
+		arg = reflect.New(expectType).Elem()
+	} else {
+		arg = reflect.ValueOf(actual)
+	}
+
+	if argType == nil && !expectTypeNilSupported {
+		panic(errors.New("attempting to call matcher with nil for non-nil expected type"))
+	}
+	if argType == nil || argType.AssignableTo(expectType) {
+		result := expected.F.Call([]reflect.Value{arg})
+		return result[0].Bool()
+	}
+	return false
 }
 
 // Get Returns the argument at the specified index.
@@ -949,7 +1030,7 @@ func (args Arguments) Diff(objects []interface{}) (string, int) {
 			expectedFmt = fmt.Sprintf("(%[1]T=%[1]v)", expected)
 		}
 
-		if matcher, ok := expected.(argumentMatcher); ok {
+		if matcher, ok := expected.(matchedByArgument); ok {
 			var matches bool
 			func() {
 				defer func() {
@@ -957,7 +1038,7 @@ func (args Arguments) Diff(objects []interface{}) (string, int) {
 						actualFmt = fmt.Sprintf("panic in argument matcher: %v", r)
 					}
 				}()
-				matches = matcher.Matches(actual)
+				matches = matcher.matchesArg(actual)
 			}()
 			if matches {
 				output = fmt.Sprintf("%s\t%d: PASS:  %s matched by %s\n", output, i, actualFmt, matcher)
@@ -968,20 +1049,20 @@ func (args Arguments) Diff(objects []interface{}) (string, int) {
 		} else {
 			switch expected := expected.(type) {
 			case anythingOfTypeArgument:
-				// type checking
-				if reflect.TypeOf(actual).Name() != string(expected) && reflect.TypeOf(actual).String() != string(expected) {
-					// not match
+				matches := expected.matchesArg(actual)
+				if !matches {
 					differences++
 					output = fmt.Sprintf("%s\t%d: FAIL:  type %s != type %s - %s\n", output, i, expected, reflect.TypeOf(actual).Name(), actualFmt)
 				}
 			case *IsTypeArgument:
-				actualT := reflect.TypeOf(actual)
-				if actualT != expected.t {
+				match := expected.matchesArg(actual)
+				if !match {
 					differences++
+					actualT := reflect.TypeOf(actual)
 					output = fmt.Sprintf("%s\t%d: FAIL:  type %s != type %s - %s\n", output, i, expected.t.Name(), actualT.Name(), actualFmt)
 				}
-			case *FunctionalOptionsArgument:
-				t := expected.value
+			case functionalOptionsArgument:
+				t := expected.values
 
 				var name string
 				tValue := reflect.ValueOf(t)
