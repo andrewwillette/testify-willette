@@ -1777,15 +1777,15 @@ func Test_Arguments_Diff_WithArgMatcher(t *testing.T) {
 
 	diff, count := args.Diff([]interface{}{"string", 124, true})
 	assert.Equal(t, 1, count)
-	assert.Contains(t, diff, `(int=124) not matched by func(int) bool`)
+	assert.Contains(t, diff, `(int=124) not matched by {<func(int) bool Value>}`)
 
 	diff, count = args.Diff([]interface{}{"string", false, true})
 	assert.Equal(t, 1, count)
-	assert.Contains(t, diff, `(bool=false) not matched by func(int) bool`)
+	assert.Contains(t, diff, `(bool=false) not matched by {<func(int) bool Value>}`)
 
 	diff, count = args.Diff([]interface{}{"string", 123, false})
 	assert.Equal(t, 1, count)
-	assert.Contains(t, diff, `(int=123) matched by func(int) bool`)
+	assert.Contains(t, diff, `(int=123) matched by {<func(int) bool Value>}`)
 
 	diff, count = args.Diff([]interface{}{"string", 123, true})
 	assert.Equal(t, 0, count)
@@ -1979,8 +1979,7 @@ func TestAfterTotalWaitTimeWhileExecution(t *testing.T) {
 func TestArgumentMatcherToPrintMismatch(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			matchingExp := regexp.MustCompile(
-				`\s+mock: Unexpected Method Call\s+-*\s+GetTime\(int\)\s+0: 1\s+The closest call I have is:\s+GetTime\(mock.argumentMatcher\)\s+0: mock.argumentMatcher\{.*?\}\s+Diff:.*\(int=1\) not matched by func\(int\) bool`)
+			matchingExp := regexp.MustCompile(`\s+mock: Unexpected Method Call\s+-*\s+GetTime\(int\)\s+0: 1\s+The closest call I have is:\s+GetTime\(mock.matchedByArgument\)\s+0: mock.matchedByArgument\{.*?\}\s+Diff:.*\(int=1\) not matched by \{<func\(int\) bool Value>\}`)
 			assert.Regexp(t, matchingExp, r)
 		}
 	}()
@@ -1997,7 +1996,7 @@ func TestArgumentMatcherToPrintMismatchWithReferenceType(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			matchingExp := regexp.MustCompile(
-				`\s+mock: Unexpected Method Call\s+-*\s+GetTimes\(\[\]int\)\s+0: \[\]int\{1\}\s+The closest call I have is:\s+GetTimes\(mock.argumentMatcher\)\s+0: mock.argumentMatcher\{.*?\}\s+Diff:.*\(\[\]int=\[1\]\) not matched by func\(\[\]int\) bool`)
+				`\s+mock: Unexpected Method Call\s+-*\s+GetTimes\(\[\]int\)\s+0: \[\]int\{1\}\s+The closest call I have is:\s+GetTimes\(mock.matchedByArgument\)\s+0: mock.matchedByArgument\{.*?\}\s+Diff:.*\(\[\]int=\[1\]\) not matched by \{<func\(\[\]int\) bool Value>\}`)
 			assert.Regexp(t, matchingExp, r)
 		}
 	}()
